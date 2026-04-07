@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import openpyxl
 
 # 1. Page Configuration
 st.set_page_config(page_title="TDS Automation Portal", layout="centered")

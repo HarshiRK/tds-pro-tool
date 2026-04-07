@@ -9,7 +9,7 @@ st.set_page_config(page_title="TDS Tool", layout="centered")
 def load_data():
     try:
         # Load Excel
-        df = pd.read_excel("TDS_Master_Rate_Table_v2.xlsx", sheet_name="Master Rate Table")
+        df = pd.read_excel("tds_data.csv", sheet_name="Master Rate Table")
         
         # CLEANING: Remove hidden spaces
         df.columns = [c.strip() for c in df.columns]

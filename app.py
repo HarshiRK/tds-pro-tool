@@ -1,80 +1,78 @@
 import streamlit as st
 import pandas as pd
-import openpyxl
+from datetime import datetime
 
-# 1. Page Configuration
-st.set_page_config(page_title="TDS Automation Portal", layout="centered")
+# 1. SETUP
+st.set_page_config(page_title="TDS Tool", layout="centered")
 
-# 2. Load Data (CSV is more stable than Excel)
 @st.cache_data
 def load_data():
     try:
-        df = pd.read_csv("tds_data.csv")
-        # Clean hidden spaces from text
-        for col in ['Section', 'Payee Type']:
-            df[col] = df[col].astype(str).str.strip()
-        # Standardize dates
-        df['Effective From'] = pd.to_datetime(df['Effective From'], dayfirst=True)
-        df['Effective To'] = pd.to_datetime(df['Effective To'], dayfirst=True)
+        # Load Excel
+        df = pd.read_excel("TDS_Master_Rate_Table_v2.xlsx", sheet_name="Master Rate Table")
+        
+        # CLEANING: Remove hidden spaces
+        df.columns = [c.strip() for c in df.columns]
+        df['Section'] = df['Section'].astype(str).str.strip()
+        df['Payee Type'] = df['Payee Type'].astype(str).str.strip()
+        
+        # DATE FIX: Convert to dates and fill BLANKS
+        # If Effective From is blank, assume ancient past. If Effective To is blank, assume far future.
+        df['Effective From'] = pd.to_datetime(df['Effective From']).fillna(pd.Timestamp('1900-01-01'))
+        df['Effective To'] = pd.to_datetime(df['Effective To']).fillna(pd.Timestamp('2099-12-31'))
+        
         return df
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Excel Error: {e}")
         return None
 
 df = load_data()
 
 if df is not None:
     st.title("🏛️ TDS Calculation Portal")
-    st.markdown("---")
 
-    # 3. User Inputs
+    # 2. INPUTS
     col1, col2 = st.columns(2)
     with col1:
-        section = st.selectbox("1. Select Section", options=sorted(df['Section'].unique()))
-        amount = st.number_input("2. Transaction Amount (INR)", min_value=0.0, step=1000.0)
-        pay_date = st.date_input("3. Payment Date")
+        section = st.selectbox("Select Section", options=sorted(df['Section'].unique()))
+        amount = st.number_input("Transaction Amount", min_value=0.0)
+        pay_date = st.date_input("Payment Date")
 
     with col2:
-        pan_status = st.radio("4. PAN Available?", ["Yes", "No"])
-        # Only show payees that exist for this specific section
+        pan_status = st.radio("PAN Available?", ["Yes", "No"])
         payee_options = sorted(df[df['Section'] == section]['Payee Type'].unique())
-        payee_type = st.selectbox("5. Payee Category", options=payee_options)
+        payee_type = st.selectbox("Payee Category", options=payee_options)
 
-    # 4. Calculation Logic
+    # 3. SMART CALCULATION
     if st.button("Calculate TDS Now"):
         target_date = pd.to_datetime(pay_date)
         
-        # Filter for Section and Payee
+        # Filter Section & Payee
         potential_rules = df[(df['Section'] == section) & (df['Payee Type'] == payee_type)]
         
-        # Date Logic: Find valid row OR use latest available
+        # Filter Date (The fix for your error is here)
         rule = potential_rules[(potential_rules['Effective From'] <= target_date) & 
                                (potential_rules['Effective To'] >= target_date)]
         
         if rule.empty and not potential_rules.empty:
             rule = potential_rules.sort_values(by='Effective From', ascending=False).head(1)
-            st.info("💡 Note: Using latest available rates for this date.")
 
         if not rule.empty:
             selected = rule.iloc[0]
-            # Handle non-numeric rates like 'Avg'
-            rate_val = str(selected['Rate of TDS (%)']).strip()
+            # Use 20% if No PAN, otherwise use Excel rate
+            base_rate_raw = selected['Rate of TDS (%)']
             
-            if rate_val.lower() == 'avg':
-                st.warning(f"Note: {selected['Notes']}")
+            if str(base_rate_raw).strip().lower() == 'avg':
+                st.info(f"Section {section}: {selected['Notes']}")
             else:
-                base_rate = float(rate_val)
+                base_rate = float(base_rate_raw)
+                final_rate = 20.0 if pan_status == "No" else base_rate
                 threshold = float(selected['Threshold Amount (Rs)'])
                 
-                # Apply Section 206AA (No PAN = 20%)
-                final_rate = 20.0 if pan_status == "No" else base_rate
-                
                 if amount > threshold:
-                    tax = (amount * final_rate) / 100
-                    st.success(f"✅ Deduct TDS: ₹{tax:,.2f}")
-                    st.metric("Final Rate Applied", f"{final_rate}%")
-                    st.caption(f"Nature: {selected['Nature of Payment']}")
+                    st.success(f"Deduct TDS: ₹{(amount * final_rate / 100):,.2f}")
+                    st.metric("Rate Applied", f"{final_rate}%")
                 else:
-                    st.warning(f"⚠️ Below Threshold (₹{threshold}). No TDS required.")
+                    st.warning(f"Below Threshold (₹{threshold})")
         else:
-            st.error("No matching rule found in the data file.")
+            st.error("No matching rule found. Check your Excel dates.")
